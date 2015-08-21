@@ -133,3 +133,108 @@ A typical search will return records in the following format when using ElasticS
 
 }
 ```
+
+## Data creation
+
+The census geocoder uses Elasticsearch synonyms to resolve abbreviations (i.e. St for Street, or MD for Maryland).
+The synonyms.txt file with the synonyms definition must be installed in every node in the cluster, in the same directory as the elasticsearch.yml configuration file.
+
+TIGER data can be loaded using the [loader](https://github.com/cfpb/grasshopper-loader).
+
+After loading the data the following can be run to account for the synonyms:
+
+```shell
+# close the index
+curl -XPOST [ip]:9200/census/_close?pretty=1
+```
+
+```shell
+# add the synonym analyzer and filter to the settings
+curl -XPUT [ip]:9200/census/_settings?pretty=1 -d '
+{
+  "analysis" : {
+    "analyzer" : {
+      "synonym" : {
+        "tokenizer" : "whitespace",
+        "filter" : ["synonym"]
+      }
+    },
+    "filter" : {
+      "synonym" : {
+        "type" : "synonym",
+        "synonyms_path": "synonyms.txt",
+        "ignore_case": true 
+      }
+    }
+  }
+}'
+```
+
+*update the necessary properties, example of FULLNAME and STATE are below*
+
+```shell
+# update the correct properties in the mapping to use the analyzer
+# ignore_conflicts needed to avoid MergeMappingException[Merge failed with failures {[mapper [properties.property] has different index_analyzer]}]
+curl -XPUT [ip]:9200/census/_mapping/addrfeat?pretty=1&ignore_conflicts=true -d '
+{
+  "addrfeat": {
+    "properties": {
+      "properties": {
+        "properties": {
+          "FULLNAME": {
+            "type": "string",
+            "analyzer": "synonym"
+          },
+          "STATE": {
+            "type": "string",
+            "analyzer": "synonym"
+          }
+        }
+      }
+    }
+  }
+}'
+```
+
+```shell
+# verify the mapping is correct
+curl -XGET http://[ip]:9200/census/_mapping?pretty=1
+```
+
+within the response you should see
+
+```json
+"FULLNAME": {
+  "type": "string",
+  "search_analyzer": "synonym"
+},
+"STATE": {
+  "type": "string",
+  "search_analyzer": "synonym"
+},
+```
+
+then you can
+
+```shell
+# run some tests
+# mixed case spelled out
+curl -XGET http://[ip]:9200/census/_search?pretty=1
+{
+    "query": {
+        "match": {
+            "properties.FULLNAME": "Road"
+        }
+    }
+}
+
+# lowercase abbrevated
+GET /census/_search?pretty=1
+{
+    "query": {
+        "match": {
+            "properties.FULLNAME": "rd"
+        }
+    }
+}
+```
